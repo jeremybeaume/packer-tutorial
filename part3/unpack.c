@@ -1,5 +1,9 @@
-#include <stdio.h>
-#include <stdlib.h>
+/**
+Compile with :
+
+mingw32-gcc.exe unpack.c -o unpacker.exe "-Wl,--entry=__start" -nostartfiles -nostdlib -lkernel32
+
+**/
 
 #include <windows.h>
 #include <winnt.h>
@@ -7,44 +11,39 @@
 // loads a PE in memory, returns the entry point address
 void* load_PE (char* PE_data);
 
-int main(int argc, char** argv) {
-	if(argc<2) {
-		printf("missing path argument\n");
-		return 1;
-	}
+// some basic functions intended to limits the external libraries needed
+int mystrcmp(char* a, char* b);
+void mymemcpy(char* dst, char* src, unsigned int size);
+void mymemset(char* dst, char c, unsigned int size);
 
-	FILE* exe_file = fopen(argv[1], "rb");
-	if(!exe_file) {
-		printf("error opening file\n");
-		return 1;
-	}
+int _start(void) { //Entrypoint for the program
 
-	// Get file size : put pointer at the end
-	fseek(exe_file, 0L, SEEK_END);
-	// and read its position
-	long int file_size = ftell(exe_file);
-	// put the pointer back at the beginning
-	fseek(exe_file, 0L, SEEK_SET);
+    // Get the current module VA (ie PE header addr)
+    char* unpacker_VA = (char*) GetModuleHandleA(NULL);
 
-	//allocate memory and read the whole file
-	char* exe_file_data = malloc(file_size+1);
+    // get to the section header
+    IMAGE_DOS_HEADER* p_DOS_HDR  = (IMAGE_DOS_HEADER*) unpacker_VA;
+    IMAGE_NT_HEADERS* p_NT_HDR = (IMAGE_NT_HEADERS*) (((char*) p_DOS_HDR) + p_DOS_HDR->e_lfanew);
+    IMAGE_SECTION_HEADER* sections = (IMAGE_SECTION_HEADER*) (p_NT_HDR + 1);
+	
+    char* packed_PE = NULL;
+    char packed_section_name[] = ".packed";
 
-	//read whole file
-	size_t n_read = fread(exe_file_data, 1, file_size, exe_file);
-	if(n_read != file_size) {
-		printf("reading error (%d)\n", n_read);
-		return 1;
-	}
+    // search for the ".packed" section
+    for(int i=0; i<p_NT_HDR->FileHeader.NumberOfSections; ++i) {
+        if (mystrcmp(sections[i].Name, packed_section_name)) {
+            packed_PE = unpacker_VA + sections[i].VirtualAddress;
+            break;
+        }
+    }
 
-	// load the PE in memory
-	printf("[+] Loading PE file\n");
-	void* start_address = load_PE(exe_file_data);
-	if(start_address) {
-		// call its entry point
-		((void (*)(void)) start_address)();
-	}
-	return 0;
+    //load the data located at the .packed section
+    if(packed_PE != NULL) {
+        void (*packed_entry_point)(void) = (void(*)()) load_PE(packed_PE);
+        packed_entry_point();
+    }
 }
+
 
 void* load_PE (char* PE_data) {
 
@@ -75,7 +74,7 @@ void* load_PE (char* PE_data) {
 	DWORD oldProtect;
 
 	VirtualProtect(ImageBase, p_NT_HDR->OptionalHeader.SizeOfHeaders, PAGE_READWRITE, &oldProtect);
-	memcpy(ImageBase, PE_data, p_NT_HDR->OptionalHeader.SizeOfHeaders);
+	mymemcpy(ImageBase, PE_data, p_NT_HDR->OptionalHeader.SizeOfHeaders);
 
 
 	// Section headers starts right after the IMAGE_NT_HEADERS struct, so we do some pointer arithmetic-fu here.
@@ -92,11 +91,11 @@ void* load_PE (char* PE_data) {
 	    	// A VirtualProtect to be sure
 	        VirtualProtect(dest, sections[i].SizeOfRawData, PAGE_READWRITE, &oldProtect);
 	        // We copy SizeOfRaw data bytes, from the offset PointertoRawData in the file
-	        memcpy(dest, PE_data + sections[i].PointerToRawData, sections[i].SizeOfRawData);
+	        mymemcpy(dest, PE_data + sections[i].PointerToRawData, sections[i].SizeOfRawData);
 	    } else {
 	    	// if no raw data to copy, we just put zeroes, based on the VirtualSize
 	        VirtualProtect(dest, sections[i].Misc.VirtualSize, PAGE_READWRITE, &oldProtect);
-	        memset(dest, 0, sections[i].Misc.VirtualSize);
+	        mymemset(dest, 0, sections[i].Misc.VirtualSize);
 	    }
 	}
 
@@ -212,4 +211,24 @@ void* load_PE (char* PE_data) {
 	}
 
 	return (void*) (ImageBase + entry_point_RVA);
+}
+
+int mystrcmp(char* a, char* b) {
+    while(*a == *b && *a) {
+        a++;
+        b++;
+    }
+    return (*a == *b);
+}
+
+void mymemcpy(char* dst, char* src, unsigned int size) {
+    for(unsigned int i=0; i<size; ++i) {
+        dst[i] = src[i];
+    }
+}
+
+void mymemset(char* dst, char c, unsigned int size) {
+    for(unsigned int i=0; i<size; ++i) {
+        dst[i] = c;
+    }   
 }

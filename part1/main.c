@@ -118,7 +118,4 @@ void* load_PE (char* PE_data) {
 	}
 
 	return (void*) (ImageBase + entry_point_RVA);
-
-
-	return NULL;
 }
