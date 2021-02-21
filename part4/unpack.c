@@ -52,22 +52,26 @@ void* load_PE (char* PE_data) {
     IMAGE_DOS_HEADER* p_DOS_HDR  = (IMAGE_DOS_HEADER*) PE_data;
     IMAGE_NT_HEADERS* p_NT_HDR = (IMAGE_NT_HEADERS*) (((char*) p_DOS_HDR) + p_DOS_HDR->e_lfanew);
 
-    DWORD hdr_image_base = p_NT_HDR->OptionalHeader.ImageBase;
-    DWORD size_of_image = p_NT_HDR->OptionalHeader.SizeOfImage;
-    DWORD entry_point_RVA = p_NT_HDR->OptionalHeader.AddressOfEntryPoint;
-    DWORD size_of_headers = p_NT_HDR->OptionalHeader.SizeOfHeaders;
-
     /** Allocate Memory **/
-    char* ImageBase = (char*) VirtualAlloc(NULL, size_of_image, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-    if(ImageBase == NULL) {
-        // Allocation failed
-        return NULL;
+
+    char* ImageBase = NULL;
+    if(p_NT_HDR->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE) {
+        ImageBase = (char*) VirtualAlloc(NULL, p_NT_HDR->OptionalHeader.SizeOfImage, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+        if(ImageBase == NULL) {
+            // Allocation failed
+            return NULL;
+        }
+    } else {
+        //if no ASLR : the packer would have placed us at the expected image base already
+        ImageBase = (char*) GetModuleHandleA(NULL);
     }
 
     /** Map PE sections in memory **/
 
+    DWORD oldProtect;
+    //The PE header is readonly, we have to make it writable to be able to change it
+    VirtualProtect(ImageBase, p_NT_HDR->OptionalHeader.SizeOfHeaders, PAGE_READWRITE, &oldProtect);
     mymemcpy(ImageBase, PE_data, p_NT_HDR->OptionalHeader.SizeOfHeaders);
-
 
     // Section headers starts right after the IMAGE_NT_HEADERS struct, so we do some pointer arithmetic-fu here.
     IMAGE_SECTION_HEADER* sections = (IMAGE_SECTION_HEADER*) (p_NT_HDR + 1); 
@@ -80,9 +84,13 @@ void* load_PE (char* PE_data) {
 
         // check if there is Raw data to copy
         if(sections[i].SizeOfRawData > 0) {
+            // A VirtualProtect to be sure we can write in the allocated section
+            VirtualProtect(dest, sections[i].SizeOfRawData, PAGE_READWRITE, &oldProtect);
             // We copy SizeOfRaw data bytes, from the offset PointertoRawData in the file
             mymemcpy(dest, PE_data + sections[i].PointerToRawData, sections[i].SizeOfRawData);
         } else {
+            // if no raw data to copy, we just put zeroes, based on the VirtualSize
+            VirtualProtect(dest, sections[i].Misc.VirtualSize, PAGE_READWRITE, &oldProtect);
             mymemset(dest, 0, sections[i].Misc.VirtualSize);
         }
     }
@@ -184,7 +192,6 @@ void* load_PE (char* PE_data) {
     /** Map PE sections privileges **/
 
     //Set permission for the PE hader to read only
-    DWORD oldProtect;
     VirtualProtect(ImageBase, p_NT_HDR->OptionalHeader.SizeOfHeaders, PAGE_READONLY, &oldProtect);
 
     for(int i=0; i<p_NT_HDR->FileHeader.NumberOfSections; ++i) {
@@ -199,7 +206,7 @@ void* load_PE (char* PE_data) {
         VirtualProtect(dest, sections[i].Misc.VirtualSize, v_perm, &oldProtect);
     }
 
-    return (void*) (ImageBase + entry_point_RVA);
+    return (void*) (ImageBase + p_NT_HDR->OptionalHeader.AddressOfEntryPoint);
 }
 
 int mystrcmp(char* a, char* b) {

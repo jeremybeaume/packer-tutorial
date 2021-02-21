@@ -53,28 +53,20 @@ void* load_PE (char* PE_data) {
     IMAGE_DOS_HEADER* p_DOS_HDR  = (IMAGE_DOS_HEADER*) PE_data;
     IMAGE_NT_HEADERS* p_NT_HDR = (IMAGE_NT_HEADERS*) (((char*) p_DOS_HDR) + p_DOS_HDR->e_lfanew);
 
-    DWORD ASLR = p_NT_HDR->OptionalHeader.DllCharacteristics & IMAGE_DLLCHARACTERISTICS_DYNAMIC_BASE;
     DWORD hdr_image_base = p_NT_HDR->OptionalHeader.ImageBase;
     DWORD size_of_image = p_NT_HDR->OptionalHeader.SizeOfImage;
     DWORD entry_point_RVA = p_NT_HDR->OptionalHeader.AddressOfEntryPoint;
+    DWORD size_of_headers = p_NT_HDR->OptionalHeader.SizeOfHeaders;
 
     /** Allocate Memory **/
-
-    char* ImageBase = NULL;
-
-    if(ASLR) {
-        ImageBase = (char*) VirtualAlloc(NULL, size_of_image, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
-        if(ImageBase == NULL) {
-            // Allocation failed
-            return (void*) 0x41414141;
-        }
+    char* ImageBase = (char*) VirtualAlloc(NULL, size_of_image, MEM_RESERVE | MEM_COMMIT, PAGE_READWRITE);
+    if(ImageBase == NULL) {
+        // Allocation failed
+        return NULL;
     }
 
     /** Map PE sections in memory **/
 
-    DWORD oldProtect;
-
-    VirtualProtect(ImageBase, p_NT_HDR->OptionalHeader.SizeOfHeaders, PAGE_READWRITE, &oldProtect);
     memcpy(ImageBase, PE_data, p_NT_HDR->OptionalHeader.SizeOfHeaders);
 
 
@@ -89,13 +81,9 @@ void* load_PE (char* PE_data) {
 
         // check if there is Raw data to copy
         if(sections[i].SizeOfRawData > 0) {
-            // A VirtualProtect to be sure
-            VirtualProtect(dest, sections[i].SizeOfRawData, PAGE_READWRITE, &oldProtect);
             // We copy SizeOfRaw data bytes, from the offset PointertoRawData in the file
             memcpy(dest, PE_data + sections[i].PointerToRawData, sections[i].SizeOfRawData);
         } else {
-            // if no raw data to copy, we just put zeroes, based on the VirtualSize
-            VirtualProtect(dest, sections[i].Misc.VirtualSize, PAGE_READWRITE, &oldProtect);
             memset(dest, 0, sections[i].Misc.VirtualSize);
         }
     }
@@ -197,6 +185,7 @@ void* load_PE (char* PE_data) {
     /** Map PE sections privileges **/
 
     //Set permission for the PE hader to read only
+    DWORD oldProtect;
     VirtualProtect(ImageBase, p_NT_HDR->OptionalHeader.SizeOfHeaders, PAGE_READONLY, &oldProtect);
 
     for(int i=0; i<p_NT_HDR->FileHeader.NumberOfSections; ++i) {
